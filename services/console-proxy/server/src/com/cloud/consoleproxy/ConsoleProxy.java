@@ -358,6 +358,7 @@ public class ConsoleProxy {
             server.createContext("/resource/", new ConsoleProxyResourceHandler());
             server.createContext("/ajax", new ConsoleProxyAjaxHandler());
             server.createContext("/ajaximg", new ConsoleProxyAjaxImageHandler());
+            server.createContext("/novnc", new NoVncConsoleHandler());
             server.setExecutor(new ThreadExecutor()); // creates a default executor
             server.start();
         } catch (Exception e) {
