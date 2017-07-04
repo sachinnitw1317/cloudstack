@@ -16,6 +16,16 @@
 // under the License.
 package com.cloud.consoleproxy.vnc;
 
+import com.cloud.consoleproxy.ConsoleProxyClientListener;
+import com.cloud.consoleproxy.util.Logger;
+import com.cloud.consoleproxy.util.RawHTTP;
+import com.cloud.consoleproxy.vnc.packet.client.KeyboardEventPacket;
+import com.cloud.consoleproxy.vnc.packet.client.MouseEventPacket;
+
+import javax.crypto.Cipher;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.DESKeySpec;
 import java.awt.Frame;
 import java.awt.ScrollPane;
 import java.awt.event.WindowAdapter;
@@ -27,31 +37,30 @@ import java.net.Socket;
 import java.net.UnknownHostException;
 import java.security.spec.KeySpec;
 
-import javax.crypto.Cipher;
-import javax.crypto.SecretKey;
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.DESKeySpec;
-
-import com.cloud.consoleproxy.ConsoleProxyClientListener;
-import com.cloud.consoleproxy.util.Logger;
-import com.cloud.consoleproxy.util.RawHTTP;
-import com.cloud.consoleproxy.vnc.packet.client.KeyboardEventPacket;
-import com.cloud.consoleproxy.vnc.packet.client.MouseEventPacket;
-
 public class VncClient {
     private static final Logger s_logger = Logger.getLogger(VncClient.class);
-
+    private final VncScreenDescription screen = new VncScreenDescription();
     private Socket socket;
     private DataInputStream is;
     private DataOutputStream os;
-
-    private final VncScreenDescription screen = new VncScreenDescription();
-
     private VncClientPacketSender sender;
     private VncServerPacketReceiver receiver;
 
     private boolean noUI = false;
     private ConsoleProxyClientListener clientListener = null;
+
+
+    public VncClient(ConsoleProxyClientListener clientListener) {
+        noUI = true;
+        this.clientListener = clientListener;
+    }
+
+    public VncClient(String host, int port, String password, boolean noUI, ConsoleProxyClientListener clientListener) throws UnknownHostException, IOException {
+
+        this.noUI = noUI;
+        this.clientListener = clientListener;
+        connectTo(host, port, password);
+    }
 
     public static void main(String args[]) {
         if (args.length < 3) {
@@ -82,22 +91,36 @@ public class VncClient {
     }
 
     private static void printHelpMessage() {
-        /* LOG */s_logger.info("Usage: HOST PORT PASSWORD.");
+        /* LOG */
+        s_logger.info("Usage: HOST PORT PASSWORD.");
     }
 
-    public VncClient(ConsoleProxyClientListener clientListener) {
-        noUI = true;
-        this.clientListener = clientListener;
-    }
-
-    public VncClient(String host, int port, String password, boolean noUI, ConsoleProxyClientListener clientListener) throws UnknownHostException, IOException {
-
-        this.noUI = noUI;
-        this.clientListener = clientListener;
-        connectTo(host, port, password);
+    /**
+     * Reverse bits in byte, so least significant bit will be most significant
+     * bit. E.g. 01001100 will become 00110010.
+     * <p>
+     * See also: http://www.vidarholen.net/contents/junk/vnc.html ,
+     * http://bytecrafter
+     * .blogspot.com/2010/09/des-encryption-as-used-in-vnc.html
+     *
+     * @param b a byte
+     * @return byte in reverse order
+     */
+    private static byte flipByte(byte b) {
+        int b1_8 = (b & 0x1) << 7;
+        int b2_7 = (b & 0x2) << 5;
+        int b3_6 = (b & 0x4) << 3;
+        int b4_5 = (b & 0x8) << 1;
+        int b5_4 = (b & 0x10) >>> 1;
+        int b6_3 = (b & 0x20) >>> 3;
+        int b7_2 = (b & 0x40) >>> 5;
+        int b8_1 = (b & 0x80) >>> 7;
+        byte c = (byte) (b1_8 | b2_7 | b3_6 | b4_5 | b5_4 | b6_3 | b7_2 | b8_1);
+        return c;
     }
 
     public void shutdown() {
+
         if (sender != null)
             sender.closeConnection();
 
@@ -130,6 +153,7 @@ public class VncClient {
                         + "failed to get close resource for socket: " + e.getLocalizedMessage());
             }
         }
+
     }
 
     public ConsoleProxyClientListener getClientListener() {
@@ -328,10 +352,8 @@ public class VncClient {
     /**
      * Encode password using DES encryption with given challenge.
      *
-     * @param challenge
-     *            a random set of bytes.
-     * @param password
-     *            a password
+     * @param challenge a random set of bytes.
+     * @param password  a password
      * @return DES hash of password and challenge
      */
     public byte[] encodePassword(byte[] challenge, String password) throws Exception {
@@ -353,31 +375,6 @@ public class VncClient {
 
         byte[] response = cipher.doFinal(challenge);
         return response;
-    }
-
-    /**
-     * Reverse bits in byte, so least significant bit will be most significant
-     * bit. E.g. 01001100 will become 00110010.
-     *
-     * See also: http://www.vidarholen.net/contents/junk/vnc.html ,
-     * http://bytecrafter
-     * .blogspot.com/2010/09/des-encryption-as-used-in-vnc.html
-     *
-     * @param b
-     *            a byte
-     * @return byte in reverse order
-     */
-    private static byte flipByte(byte b) {
-        int b1_8 = (b & 0x1) << 7;
-        int b2_7 = (b & 0x2) << 5;
-        int b3_6 = (b & 0x4) << 3;
-        int b4_5 = (b & 0x8) << 1;
-        int b5_4 = (b & 0x10) >>> 1;
-        int b6_3 = (b & 0x20) >>> 3;
-        int b7_2 = (b & 0x40) >>> 5;
-        int b8_1 = (b & 0x80) >>> 7;
-        byte c = (byte)(b1_8 | b2_7 | b3_6 | b4_5 | b5_4 | b6_3 | b7_2 | b8_1);
-        return c;
     }
 
     private void initialize() throws IOException {
@@ -455,4 +452,5 @@ public class VncClient {
     public boolean isHostConnected() {
         return receiver != null && receiver.isConnectionAlive();
     }
+
 }

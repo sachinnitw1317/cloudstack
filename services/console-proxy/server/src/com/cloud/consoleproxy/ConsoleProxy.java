@@ -41,6 +41,8 @@ import com.sun.net.httpserver.HttpServer;
 
 import com.cloud.consoleproxy.util.Logger;
 import com.cloud.utils.PropertiesUtil;
+import org.eclipse.jetty.server.Server;
+import org.eclipse.jetty.websocket.server.WebSocketHandler;
 
 /**
  *
@@ -329,6 +331,7 @@ public class ConsoleProxy {
 
         if (httpListenPort != 0) {
             startupHttpMain();
+            startServerForNoVNC();
         } else {
             s_logger.error("A valid HTTP server port is required to be specified, please check your consoleproxy.httpListenPort settings");
             System.exit(1);
@@ -358,6 +361,7 @@ public class ConsoleProxy {
             server.createContext("/resource/", new ConsoleProxyResourceHandler());
             server.createContext("/ajax", new ConsoleProxyAjaxHandler());
             server.createContext("/ajaximg", new ConsoleProxyAjaxImageHandler());
+            server.createContext("/novnc", new NoVncConsoleHandler());
             server.setExecutor(new ThreadExecutor()); // creates a default executor
             server.start();
         } catch (Exception e) {
@@ -379,7 +383,19 @@ public class ConsoleProxy {
         }
     }
 
-    public static void main(String[] argv) {
+    private static void startServerForNoVNC(){
+        Server webServer = new Server(8000);
+        WebSocketHandler webSocketHandler = new WebSocketHandlerForNovnc();
+        webServer.setHandler(webSocketHandler);
+        try {
+            webServer.start();
+        } catch (Exception e) {
+            s_logger.error(" could not start webserver at 8000", e);
+
+        }
+    }
+
+    public static void main(String[] argv) throws Exception {
         standaloneStart = true;
         configLog4j();
         Logger.setFactory(new ConsoleProxyLoggerFactory());
@@ -441,6 +457,50 @@ public class ConsoleProxy {
 
     public static ConsoleProxyClient getAjaxVncViewer(ConsoleProxyClientParam param, String ajaxSession) throws Exception {
 
+        boolean reportLoadChange = false;
+        String clientKey = param.getClientMapKey();
+        synchronized (connectionMap) {
+            ConsoleProxyClient viewer = connectionMap.get(clientKey);
+            if (viewer == null) {
+                authenticationExternally(param);
+                viewer = getClient(param);
+                viewer.initClient(param);
+
+                connectionMap.put(clientKey, viewer);
+                s_logger.info("Added viewer object " + viewer);
+                reportLoadChange = true;
+            } else {
+                // protected against malicous attack by modifying URL content
+                if (ajaxSession != null) {
+                    long ajaxSessionIdFromUrl = Long.parseLong(ajaxSession);
+                    if (ajaxSessionIdFromUrl != viewer.getAjaxSessionId())
+                        throw new AuthenticationException("Cannot use the existing viewer " + viewer + ": modified AJAX session id");
+                }
+
+                if (param.getClientHostPassword() == null || param.getClientHostPassword().isEmpty() ||
+                        !param.getClientHostPassword().equals(viewer.getClientHostPassword()))
+                    throw new AuthenticationException("Cannot use the existing viewer " + viewer + ": bad sid");
+
+                if (!viewer.isFrontEndAlive()) {
+
+                    authenticationExternally(param);
+                    viewer.initClient(param);
+                    reportLoadChange = true;
+                }
+            }
+
+            if (reportLoadChange) {
+                ConsoleProxyClientStatsCollector statsCollector = getStatsCollector();
+                String loadInfo = statsCollector.getStatsReport();
+                reportLoadInfo(loadInfo);
+                if (s_logger.isDebugEnabled())
+                    s_logger.debug("Report load change : " + loadInfo);
+            }
+            return viewer;
+        }
+    }
+
+    public static ConsoleProxyClient getNoVncViewer(ConsoleProxyClientParam param, String ajaxSession) throws Exception{
         boolean reportLoadChange = false;
         String clientKey = param.getClientMapKey();
         synchronized (connectionMap) {
