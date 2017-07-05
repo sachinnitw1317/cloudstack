@@ -16,14 +16,13 @@
 // under the License.
 package com.cloud.consoleproxy;
 
-import com.cloud.consoleproxy.rdp.KeysymToKeycode;
-import com.cloud.consoleproxy.rdp.RdpBufferedImageCanvas;
-import com.cloud.consoleproxy.vnc.FrameBufferCanvas;
-import common.AwtKeyEventSource;
-import common.AwtMouseEventSource;
-import common.ScreenDescription;
-import common.SizeChangeListener;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
+import java.awt.event.MouseEvent;
+import java.net.InetSocketAddress;
+
 import org.apache.log4j.Logger;
+
 import rdpclient.RdpClient;
 import streamer.Pipeline;
 import streamer.PipelineImpl;
@@ -31,10 +30,14 @@ import streamer.SocketWrapper;
 import streamer.apr.AprSocketWrapperImpl;
 import streamer.ssl.SSLState;
 
-import java.awt.event.InputEvent;
-import java.awt.event.KeyEvent;
-import java.awt.event.MouseEvent;
-import java.net.InetSocketAddress;
+import com.cloud.consoleproxy.rdp.KeysymToKeycode;
+import com.cloud.consoleproxy.rdp.RdpBufferedImageCanvas;
+import com.cloud.consoleproxy.vnc.FrameBufferCanvas;
+
+import common.AwtKeyEventSource;
+import common.AwtMouseEventSource;
+import common.ScreenDescription;
+import common.SizeChangeListener;
 
 public class ConsoleProxyRdpClient extends ConsoleProxyClientBase {
 
@@ -106,45 +109,45 @@ public class ConsoleProxyRdpClient extends ConsoleProxyClientBase {
 
         KeyEvent keyEvent = map(event, code, modifiers);
         switch (event) {
-            case KEY_DOWN:
-                _keyEventSource.keyPressed(keyEvent);
-                break;
+        case KEY_DOWN:
+            _keyEventSource.keyPressed(keyEvent);
+            break;
 
-            case KEY_UP:
-                _keyEventSource.keyReleased(keyEvent);
-                break;
+        case KEY_UP:
+            _keyEventSource.keyReleased(keyEvent);
+            break;
 
-            case KEY_PRESS:
-                break;
+        case KEY_PRESS:
+            break;
 
-            default:
-                assert (false);
-                break;
+        default:
+            assert (false);
+            break;
         }
     }
 
     private KeyEvent map(InputEventType event, int code, int modifiers) {
         int keycode = KeysymToKeycode.getKeycode(code);
-        char keyChar = (char) keycode;
+        char keyChar = (char)keycode;
 
         KeyEvent keyEvent = null;
         int modifier = mapModifier(modifiers);
 
         switch (event) {
-            case KEY_DOWN:
-                keyEvent = new KeyEvent(_canvas, KeyEvent.KEY_PRESSED, System.currentTimeMillis(), modifier, keycode, keyChar);
-                break;
+        case KEY_DOWN:
+            keyEvent = new KeyEvent(_canvas, KeyEvent.KEY_PRESSED, System.currentTimeMillis(), modifier, keycode, keyChar);
+            break;
 
-            case KEY_UP:
-                keyEvent = new KeyEvent(_canvas, KeyEvent.KEY_RELEASED, System.currentTimeMillis(), modifier, keycode, keyChar);
-                break;
+        case KEY_UP:
+            keyEvent = new KeyEvent(_canvas, KeyEvent.KEY_RELEASED, System.currentTimeMillis(), modifier, keycode, keyChar);
+            break;
 
-            case KEY_PRESS:
-                break;
+        case KEY_PRESS:
+            break;
 
-            default:
-                assert (false);
-                break;
+        default:
+            assert (false);
+            break;
         }
         return keyEvent;
     }
@@ -172,17 +175,16 @@ public class ConsoleProxyRdpClient extends ConsoleProxyClientBase {
         }
     }
 
-
     public int mapMouseDownModifier(int code, int modifiers) {
         int mod = mapModifier(modifiers);
         switch (code) {
-            case 0:
-                mod = mod | MouseEvent.BUTTON1_DOWN_MASK;
-                break;
-            case 2:
-                mod = mod | MouseEvent.BUTTON3_DOWN_MASK;
-                break;
-            default:
+        case 0:
+            mod = mod | MouseEvent.BUTTON1_DOWN_MASK;
+            break;
+        case 2:
+            mod = mod | MouseEvent.BUTTON3_DOWN_MASK;
+            break;
+        default:
         }
         return mod;
     }
@@ -190,13 +192,13 @@ public class ConsoleProxyRdpClient extends ConsoleProxyClientBase {
     public int mapMouseUpModifier(int code, int modifiers) {
         int mod = mapModifier(modifiers);
         switch (code) {
-            case 0:
-                mod = mod | MouseEvent.BUTTON1_MASK;
-                break;
-            case 2:
-                mod = mod | MouseEvent.BUTTON3_MASK;
-                break;
-            default:
+        case 0:
+            mod = mod | MouseEvent.BUTTON1_MASK;
+            break;
+        case 2:
+            mod = mod | MouseEvent.BUTTON3_MASK;
+            break;
+        default:
         }
         return mod;
     }
@@ -221,12 +223,12 @@ public class ConsoleProxyRdpClient extends ConsoleProxyClientBase {
 
     public int mapMouseButton(int code) {
         switch (code) {
-            case 0:
-                return MouseEvent.BUTTON1;
-            case 2:
-                return MouseEvent.BUTTON3;
-            default:
-                return MouseEvent.BUTTON2;
+        case 0:
+            return MouseEvent.BUTTON1;
+        case 2:
+            return MouseEvent.BUTTON3;
+        default:
+            return MouseEvent.BUTTON2;
         }
 
     }

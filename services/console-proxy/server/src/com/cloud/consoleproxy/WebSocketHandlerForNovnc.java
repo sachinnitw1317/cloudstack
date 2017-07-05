@@ -1,12 +1,7 @@
 package com.cloud.consoleproxy;
 
-import com.cloud.consoleproxy.vnc.VncClient;
-import com.cloud.consoleproxy.vnc.VncScreenDescription;
-import com.cloud.consoleproxy.vnc.VncClientPacketSender;
-import com.cloud.consoleproxy.vnc.VncServerPacketReceiver;
-import com.cloud.consoleproxy.vnc.BufferedImageCanvas;
 import com.cloud.consoleproxy.vnc.RfbConstants;
-
+import com.cloud.consoleproxy.vnc.VncScreenDescription;
 import org.apache.log4j.Logger;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.websocket.api.Session;
@@ -25,10 +20,6 @@ import javax.crypto.spec.DESKeySpec;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.awt.Frame;
-import java.awt.ScrollPane;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -52,11 +43,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
     private Socket vncSocket;
     private DataInputStream is;
     private DataOutputStream os;
-    private ConsoleProxyClientListenerForNoVnc consoleProxyClientListener;
-    private VncClientPacketSender sender;
-    private VncServerPacketReceiver receiver;
-
-    private VncClient vncClient;
+    private Session session;
 
     /**
      * Reverse bits in byte, so least significant bit will be most significant
@@ -80,6 +67,14 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         int b8_1 = (b & 0x80) >>> 7;
         byte c = (byte) (b1_8 | b2_7 | b3_6 | b4_5 | b5_4 | b6_3 | b7_2 | b8_1);
         return c;
+    }
+
+    public static final byte[] intToByteArray(int value) {
+        return new byte[]{
+                (byte) (value >>> 24),
+                (byte) (value >>> 16),
+                (byte) (value >>> 8),
+                (byte) value};
     }
 
     @Override
@@ -108,12 +103,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         s_logger.info("Connect: " + session.getRemoteAddress().getAddress());
         s_logger.info(session.getUpgradeRequest().getRequestURI());
         System.out.println("Responding to client");
-
-        try {
-            sendResponseString(session, "Conected to server");
-        } catch (Exception e) {
-            s_logger.info("send String error", e);
-        }
 
         String queries = ((WebSocketSession) session).getRequestURI().getQuery();
         Map<String, String> queryMap = ConsoleProxyHttpHandlerHelper.getQueryMap(queries);
@@ -199,10 +188,9 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
     }
 
     private void proxynoVNC(Session session, ConsoleProxyClientParam param) {
-
+        this.session = session;
         try {
             vncSocket = new Socket(param.getClientHostAddress(), param.getClientHostPort());
-            vncClient = new VncClient(consoleProxyClientListener);
             doConnect(vncSocket, param.getClientHostPassword());
         } catch (IOException e) {
             s_logger.error("Could not connect to host", e);
@@ -214,7 +202,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
                 while (true) {
                     try {
                         vncSocket.setSoTimeout(0);
-                        readBytes = vncSocket.getInputStream().read(b);
+                        readBytes = is.readUnsignedByte();
                     } catch (IOException e) {
                         e.printStackTrace();
                     }
@@ -232,6 +220,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         readThread.start();
         try {
             readThread.join();
+            shutdown();
         } catch (InterruptedException e) {
             s_logger.error("Connection with host failed", e);
         }
@@ -251,7 +240,10 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
 
+    private void sendInt(Session session, int i) {
+        sendResponseBytes(session,intToByteArray(i),4);
     }
 
     @OnWebSocketClose
@@ -273,69 +265,9 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         authenticate(password);
         initialize();
 
-        s_logger.info("Connecting to VNC server succeeded, start session");
-
-        // Run client-to-server packet sender
-        sender = new VncClientPacketSender(os, screen, vncClient );
-
-        // Create buffered image canvas
-        BufferedImageCanvas canvas = new BufferedImageCanvas(sender, screen.getFramebufferWidth(), screen.getFramebufferHeight());
-
-        // Subscribe packet sender to various events
-        canvas.addMouseListener(sender);
-        canvas.addMouseMotionListener(sender);
-        canvas.addKeyListener(sender);
-
-        Frame frame = null;
-//        if (!noUI)
-        frame = createVncClientMainWindow(canvas, screen.getDesktopName());
-
-        new Thread(sender).start();
-
-        // Run server-to-client packet receiver
-        receiver = new VncServerPacketReceiver(is, canvas, screen, vncClient, sender,consoleProxyClientListener);
-        try {
-            receiver.run();
-        } finally {
-            if (frame != null) {
-                frame.setVisible(false);
-                frame.dispose();
-            }
-            shutdown();
-        }
-    }
-
-    private Frame createVncClientMainWindow(BufferedImageCanvas canvas, String title) {
-        // Create AWT windows
-        final Frame frame = new Frame(title + " - VNCle");
-
-        // Use scrolling pane to support screens, which are larger than ours
-        ScrollPane scroller = new ScrollPane(ScrollPane.SCROLLBARS_AS_NEEDED);
-        scroller.add(canvas);
-        scroller.setSize(screen.getFramebufferWidth(), screen.getFramebufferHeight());
-
-        frame.add(scroller);
-        frame.pack();
-        frame.setVisible(true);
-
-        frame.addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent evt) {
-                frame.setVisible(false);
-                shutdown();
-            }
-        });
-
-        return frame;
     }
 
     public void shutdown() {
-
-        if (sender != null)
-            sender.closeConnection();
-
-        if (receiver != null)
-            receiver.closeConnection();
 
         if (is != null) {
             try {
@@ -372,14 +304,19 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
     private void authenticate(String password) throws IOException {
         // Read security type
         int authType = is.readInt();
+        sendInt(session, authType);
+//        sendResponseBytes(session,intToByteArray(authType),4);
 
         switch (authType) {
             case RfbConstants.CONNECTION_FAILED: {
                 // Server forbids to connect. Read reason and throw exception
 
                 int length = is.readInt();
+                sendInt(session, length);
+
                 byte[] buf = new byte[length];
                 is.readFully(buf);
+                sendResponseBytes(session, buf, length);
                 String reason = new String(buf, RfbConstants.CHARSET);
 
                 s_logger.error("Authentication to VNC server is failed. Reason: " + reason);
@@ -411,7 +348,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         // Read challenge
         byte[] challenge = new byte[16];
         is.readFully(challenge);
-
+        sendResponseBytes(session, challenge, 16);
         // Encode challenge with password
         byte[] response;
         try {
@@ -427,6 +364,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
 
         // Read security result
         int authResult = is.readInt();
+        sendInt(session,authResult);
 
         switch (authResult) {
             case RfbConstants.VNC_AUTH_OK: {
@@ -467,6 +405,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         // Send response: we support RFB 3.3 only
         String ourProtocolString = RfbConstants.RFB_PROTOCOL_VERSION + "\n";
         os.write(ourProtocolString.getBytes());
+        sendResponseBytes(session, buf, 12);
         os.flush();
     }
 
@@ -510,30 +449,46 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         {
             // Read frame buffer size
             int framebufferWidth = is.readUnsignedShort();
+            sendInt(session,framebufferWidth);
             int framebufferHeight = is.readUnsignedShort();
-            screen.setFramebufferSize(framebufferWidth, framebufferHeight);
-            if (consoleProxyClientListener != null)
-                consoleProxyClientListener.onFramebufferSizeChange(framebufferWidth, framebufferHeight);
+            sendInt(session,framebufferHeight);
         }
 
         // Read pixel format
         {
             int bitsPerPixel = is.readUnsignedByte();
+            sendInt(session,bitsPerPixel);
+
             int depth = is.readUnsignedByte();
+            sendInt(session,depth);
 
             int bigEndianFlag = is.readUnsignedByte();
+            sendInt(session,bigEndianFlag);
+
             int trueColorFlag = is.readUnsignedByte();
+            sendInt(session,trueColorFlag);
 
             int redMax = is.readUnsignedShort();
+            sendInt(session,redMax);
+
             int greenMax = is.readUnsignedShort();
+            sendInt(session,greenMax);
+
             int blueMax = is.readUnsignedShort();
+            sendInt(session,blueMax);
 
             int redShift = is.readUnsignedByte();
+            sendInt(session,redShift);
+
             int greenShift = is.readUnsignedByte();
+            sendInt(session,greenShift);
+
             int blueShift = is.readUnsignedByte();
+            sendInt(session,blueShift);
 
             // Skip padding
             is.skipBytes(3);
+
 
             screen.setPixelFormat(bitsPerPixel, depth, bigEndianFlag, trueColorFlag, redMax, greenMax, blueMax, redShift, greenShift, blueShift);
         }
@@ -541,8 +496,12 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         // Read desktop name
         {
             int length = is.readInt();
+            sendInt(session,length);
+
             byte buf[] = new byte[length];
             is.readFully(buf);
+            sendResponseBytes(session, buf, length);
+
             String desktopName = new String(buf, RfbConstants.CHARSET);
             screen.setDesktopName(desktopName);
         }

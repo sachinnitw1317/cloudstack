@@ -186,7 +186,6 @@ public class ConsoleProxyServlet extends HttpServlet {
             if (cmd.equalsIgnoreCase("thumbnail")) {
                 handleThumbnailRequest(req, resp, vmId);
             } else if (cmd.equalsIgnoreCase("access")) {
-//                handleAccessRequest(req, resp, vmId);
                 handleAccessRequest(req, resp, vmId, Boolean.valueOf(websocketConsole));
             } else {
                 handleAuthRequest(req, resp, vmId);
@@ -290,9 +289,6 @@ public class ConsoleProxyServlet extends HttpServlet {
         }
 
         StringBuffer sb = new StringBuffer();
-//        sb.append("<html><title>").append(escapeHTML(vmName)).append("</title><frameset><frame src=\"").append(composeConsoleAccessUrl(rootUrl, vm, host));
-//        sb.append("\"></frame></frameset></html>");
-
         sb.append("<html><title>").append(escapeHTML(vmName)).append("</title><frameset><frame src=\"").append(composeConsoleAccessUrl(rootUrl, vm, host, webSocketRequest));
         sb.append("\"></frame></frameset></html>");
         s_logger.debug("the console url is :: " + sb.toString());
