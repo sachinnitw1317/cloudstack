@@ -5,13 +5,15 @@ import com.cloud.consoleproxy.vnc.VncScreenDescription;
 import org.apache.log4j.Logger;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.websocket.api.Session;
-import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketConnect;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
+import org.eclipse.jetty.websocket.api.annotations.OnWebSocketFrame;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketError;
 import org.eclipse.jetty.websocket.api.annotations.WebSocket;
 import org.eclipse.jetty.websocket.common.WebSocketSession;
 import org.eclipse.jetty.websocket.server.WebSocketHandler;
 import org.eclipse.jetty.websocket.servlet.WebSocketServletFactory;
+import org.eclipse.jetty.websocket.api.extensions.Frame;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -187,6 +189,14 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         }
     }
 
+    @OnWebSocketFrame
+    public void onFrame(Frame f) throws IOException {
+        System.out.printf("Frame: %d\n", f.getPayloadLength());
+        byte[] data = new byte[f.getPayloadLength()];
+        f.getPayload().get(data);
+        os.write(data);
+    }
+
     private void proxynoVNC(Session session, ConsoleProxyClientParam param) {
         this.session = session;
         try {
@@ -202,7 +212,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
                 while (true) {
                     try {
                         vncSocket.setSoTimeout(0);
-                        readBytes = is.readUnsignedByte();
+                        readBytes = is.read(b);
                     } catch (IOException e) {
                         e.printStackTrace();
                     }
@@ -212,7 +222,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
                     }
                     if (readBytes > 0) {
                         sendResponseBytes(session, b, readBytes);
-                        sendResponseString(session, "cloudstack calling");
                     }
                 }
             }
@@ -304,16 +313,12 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
     private void authenticate(String password) throws IOException {
         // Read security type
         int authType = is.readInt();
-        sendInt(session, authType);
-//        sendResponseBytes(session,intToByteArray(authType),4);
-
         switch (authType) {
             case RfbConstants.CONNECTION_FAILED: {
                 // Server forbids to connect. Read reason and throw exception
 
                 int length = is.readInt();
-                sendInt(session, length);
-
+                sendResponseBytes(session, intToByteArray(length), 4);
                 byte[] buf = new byte[length];
                 is.readFully(buf);
                 sendResponseBytes(session, buf, length);
@@ -348,7 +353,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         // Read challenge
         byte[] challenge = new byte[16];
         is.readFully(challenge);
-        sendResponseBytes(session, challenge, 16);
         // Encode challenge with password
         byte[] response;
         try {
@@ -364,8 +368,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
 
         // Read security result
         int authResult = is.readInt();
-        sendInt(session,authResult);
-
         switch (authResult) {
             case RfbConstants.VNC_AUTH_OK: {
                 // Nothing to do
@@ -438,73 +440,11 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
     }
 
     private void initialize() throws IOException {
-        // Send client initialization message
-        {
-            // Send shared flag
-            os.writeByte(RfbConstants.EXCLUSIVE_ACCESS);
-            os.flush();
-        }
-
-        // Read server initialization message
-        {
-            // Read frame buffer size
-            int framebufferWidth = is.readUnsignedShort();
-            sendInt(session,framebufferWidth);
-            int framebufferHeight = is.readUnsignedShort();
-            sendInt(session,framebufferHeight);
-        }
-
-        // Read pixel format
-        {
-            int bitsPerPixel = is.readUnsignedByte();
-            sendInt(session,bitsPerPixel);
-
-            int depth = is.readUnsignedByte();
-            sendInt(session,depth);
-
-            int bigEndianFlag = is.readUnsignedByte();
-            sendInt(session,bigEndianFlag);
-
-            int trueColorFlag = is.readUnsignedByte();
-            sendInt(session,trueColorFlag);
-
-            int redMax = is.readUnsignedShort();
-            sendInt(session,redMax);
-
-            int greenMax = is.readUnsignedShort();
-            sendInt(session,greenMax);
-
-            int blueMax = is.readUnsignedShort();
-            sendInt(session,blueMax);
-
-            int redShift = is.readUnsignedByte();
-            sendInt(session,redShift);
-
-            int greenShift = is.readUnsignedByte();
-            sendInt(session,greenShift);
-
-            int blueShift = is.readUnsignedByte();
-            sendInt(session,blueShift);
-
-            // Skip padding
-            is.skipBytes(3);
-
-
-            screen.setPixelFormat(bitsPerPixel, depth, bigEndianFlag, trueColorFlag, redMax, greenMax, blueMax, redShift, greenShift, blueShift);
-        }
-
-        // Read desktop name
-        {
-            int length = is.readInt();
-            sendInt(session,length);
-
-            byte buf[] = new byte[length];
-            is.readFully(buf);
-            sendResponseBytes(session, buf, length);
-
-            String desktopName = new String(buf, RfbConstants.CHARSET);
-            screen.setDesktopName(desktopName);
-        }
+        os.writeByte(RfbConstants.EXCLUSIVE_ACCESS);
+        os.flush();
+        // 1 for send auth type count
+        // 1 for sending auth type used i.e no auth required
+        sendResponseBytes(session,new byte[]{1,1},2);
     }
 }
 

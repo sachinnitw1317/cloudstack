@@ -837,10 +837,6 @@ var RFB;
                     return this._fail("Auth failure: " + reason);
 
                 case 1:  // no auth
-                    if (this._rfb_version >= 3.8) {
-                        this._updateState('SecurityResult');
-                        return true;
-                    }
                     this._updateState('ClientInitialisation', "No auth required");
                     return this._init_msg();
 
