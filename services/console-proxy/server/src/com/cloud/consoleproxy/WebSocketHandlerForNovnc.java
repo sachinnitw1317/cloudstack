@@ -1,7 +1,6 @@
 package com.cloud.consoleproxy;
 
 import com.cloud.consoleproxy.vnc.RfbConstants;
-import com.cloud.consoleproxy.vnc.VncScreenDescription;
 import org.apache.log4j.Logger;
 import org.eclipse.jetty.server.Request;
 import org.eclipse.jetty.websocket.api.Session;
@@ -10,10 +9,10 @@ import org.eclipse.jetty.websocket.api.annotations.OnWebSocketClose;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketFrame;
 import org.eclipse.jetty.websocket.api.annotations.OnWebSocketError;
 import org.eclipse.jetty.websocket.api.annotations.WebSocket;
+import org.eclipse.jetty.websocket.api.extensions.Frame;
 import org.eclipse.jetty.websocket.common.WebSocketSession;
 import org.eclipse.jetty.websocket.server.WebSocketHandler;
 import org.eclipse.jetty.websocket.servlet.WebSocketServletFactory;
-import org.eclipse.jetty.websocket.api.extensions.Frame;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -41,11 +40,11 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
 
 
     public static final Logger s_logger = Logger.getLogger(WebSocketHandlerForNovnc.class.getSimpleName());
-    private final VncScreenDescription screen = new VncScreenDescription();
     private Socket vncSocket;
     private DataInputStream is;
     private DataOutputStream os;
     private Session session;
+    private boolean isConnectionStart = false;
 
     /**
      * Reverse bits in byte, so least significant bit will be most significant
@@ -69,14 +68,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         int b8_1 = (b & 0x80) >>> 7;
         byte c = (byte) (b1_8 | b2_7 | b3_6 | b4_5 | b5_4 | b6_3 | b7_2 | b8_1);
         return c;
-    }
-
-    public static final byte[] intToByteArray(int value) {
-        return new byte[]{
-                (byte) (value >>> 24),
-                (byte) (value >>> 16),
-                (byte) (value >>> 8),
-                (byte) value};
     }
 
     @Override
@@ -189,13 +180,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         }
     }
 
-    @OnWebSocketFrame
-    public void onFrame(Frame f) throws IOException {
-        System.out.printf("Frame: %d\n", f.getPayloadLength());
-        byte[] data = new byte[f.getPayloadLength()];
-        f.getPayload().get(data);
-        os.write(data);
-    }
 
     private void proxynoVNC(Session session, ConsoleProxyClientParam param) {
         this.session = session;
@@ -205,33 +189,29 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         } catch (IOException e) {
             s_logger.error("Could not connect to host", e);
         }
-        Thread readThread = new Thread(new Runnable() {
-            public void run() {
-                byte[] b = new byte[1500];
-                int readBytes = -1;
-                while (true) {
-                    try {
-                        vncSocket.setSoTimeout(0);
-                        readBytes = is.read(b);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                    System.out.printf("read bytes %d\n", readBytes);
-                    if (readBytes == -1) {
-                        break;
-                    }
-                    if (readBytes > 0) {
-                        sendResponseBytes(session, b, readBytes);
-                    }
-                }
+    }
+
+    private void startProxyThread() {
+        byte[] b = new byte[1500];
+        int readBytes = -1;
+        while (true) {
+            try {
+                vncSocket.setSoTimeout(0);
+
+                if (is.available() > 0)
+                    readBytes = is.read(b);
+
+            } catch (IOException e) {
+                e.printStackTrace();
             }
-        });
-        readThread.start();
-        try {
-            readThread.join();
-            shutdown();
-        } catch (InterruptedException e) {
-            s_logger.error("Connection with host failed", e);
+            System.out.printf("read bytes %d\n", readBytes);
+            if (readBytes == -1) {
+                break;
+            }
+            if (readBytes > 0) {
+                s_logger.warn("sending bytes of size" + readBytes + " from sender thread");
+                sendResponseBytes(session, b, readBytes);
+            }
         }
     }
 
@@ -251,10 +231,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         }
     }
 
-    private void sendInt(Session session, int i) {
-        sendResponseBytes(session,intToByteArray(i),4);
-    }
-
     @OnWebSocketClose
     public void onClose(int statusCode, String reason) {
         System.out.println("Close: statusCode=" + statusCode + ", reason=" + reason);
@@ -270,9 +246,13 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         os = new DataOutputStream(socket.getOutputStream());
 
         // Initialize connection
+        s_logger.warn("Stating handshake");
         handshake();
         authenticate(password);
         initialize();
+        isConnectionStart = true;
+        s_logger.warn("initialization done");
+
 
     }
 
@@ -307,6 +287,24 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
 
     }
 
+    @OnWebSocketFrame
+    public void onFrame(Frame f) throws IOException {
+        System.out.printf("Frame: %d\n", f.getPayloadLength());
+        byte[] data = new byte[f.getPayloadLength()];
+        f.getPayload().get(data);
+        vncSocket.getOutputStream().write(data);
+
+        if (isConnectionStart) {
+            isConnectionStart = false;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    startProxyThread();
+                }
+            }).start();
+        }
+    }
+
     /**
      * VNC authentication.
      */
@@ -318,7 +316,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
                 // Server forbids to connect. Read reason and throw exception
 
                 int length = is.readInt();
-                sendResponseBytes(session, intToByteArray(length), 4);
                 byte[] buf = new byte[length];
                 is.readFully(buf);
                 sendResponseBytes(session, buf, length);
@@ -407,6 +404,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         // Send response: we support RFB 3.3 only
         String ourProtocolString = RfbConstants.RFB_PROTOCOL_VERSION + "\n";
         os.write(ourProtocolString.getBytes());
+        s_logger.warn("sendind object of size 12");
         sendResponseBytes(session, buf, 12);
         os.flush();
     }
@@ -440,13 +438,24 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
     }
 
     private void initialize() throws IOException {
+        s_logger.warn("asking for exclusive access");
         os.writeByte(RfbConstants.EXCLUSIVE_ACCESS);
         os.flush();
         // 1 for send auth type count
         // 1 for sending auth type used i.e no auth required
-        sendResponseBytes(session,new byte[]{1,1},2);
+        s_logger.warn("sending auth types and response");
+        sendResponseBytes(session, new byte[]{1, 1}, 2);
+
+        // getting initializer parameter and sending them to server
+        byte[] b = new byte[1500];
+        int readBytes = -1;
+        vncSocket.setSoTimeout(0);
+        readBytes = is.read(b);
+        sendResponseBytes(session, b, readBytes);
+
     }
 }
+
 
 
 

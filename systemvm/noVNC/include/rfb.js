@@ -670,7 +670,7 @@ var RFB;
 
             var cversion = "00" + parseInt(this._rfb_version, 10) +
                            ".00" + ((this._rfb_version * 10) % 10);
-            this._sock.send_string("RFB " + cversion + "\n");
+            // this._sock.send_string("RFB " + cversion + "\n");
             this._updateState('Security', 'Sent ProtocolVersion: ' + cversion);
         },
 
@@ -699,7 +699,7 @@ var RFB;
                     return this._fail("Unsupported security types: " + types);
                 }
 
-                this._sock.send([this._rfb_auth_scheme]);
+                // this._sock.send([this._rfb_auth_scheme]);
             } else {
                 // Server decides
                 if (this._sock.rQwait("security scheme", 4)) { return false; }
@@ -982,7 +982,9 @@ var RFB;
 
             this._timing.fbu_rt_start = (new Date()).getTime();
             this._timing.pixels = 0;
-            this._sock.flush();
+            // preventing noVNC from sending initialization data to server. 
+            // server is already initialized
+            // this._sock.flush();
 
             if (this._encrypt) {
                 this._updateState('normal', 'Connected (encrypted) to: ' + this._fb_name);
@@ -1006,7 +1008,7 @@ var RFB;
                     return this._handle_security_result();
 
                 case 'ClientInitialisation':
-                    this._sock.send([this._shared ? 1 : 0]); // ClientInitialisation
+                    // this._sock.send([this._shared ? 1 : 0]); // ClientInitialisation
                     this._updateState('ServerInitialisation', "Authentication OK");
                     return true;
 
