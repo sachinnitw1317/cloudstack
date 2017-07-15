@@ -46,6 +46,9 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
     private Session session;
     private boolean isConnectionStart = false;
     private int frameCount;
+    private String hostPassword;
+    private int authType;
+
     /**
      * Reverse bits in byte, so least significant bit will be most significant
      * bit. E.g. 01001100 will become 00110010.
@@ -103,15 +106,8 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         String portStr = queryMap.get("port");
         String sid = queryMap.get("sid");
         String tag = queryMap.get("tag");
-        String ticket = queryMap.get("ticket");
         String ajaxSessionIdStr = queryMap.get("sess");
         String eventStr = queryMap.get("event");
-        String console_url = queryMap.get("consoleurl");
-        String console_host_session = queryMap.get("sessionref");
-        String vm_locale = queryMap.get("locale");
-        String hypervHost = queryMap.get("hypervHost");
-        String username = queryMap.get("username");
-        String password = queryMap.get("password");
 
         if (tag == null)
             tag = "";
@@ -153,15 +149,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
             ConsoleProxyClientParam param = new ConsoleProxyClientParam();
             param.setClientHostAddress(host);
             param.setClientHostPort(port);
-            param.setClientHostPassword(sid);
-            param.setClientTag(tag);
-            param.setTicket(ticket);
-            param.setClientTunnelUrl(console_url);
-            param.setClientTunnelSession(console_host_session);
-            param.setLocale(vm_locale);
-            param.setHypervHost(hypervHost);
-            param.setUsername(username);
-            param.setPassword(password);
+            this.hostPassword = sid;
             proxynoVNC(session, param);
         } catch (Exception e) {
 
@@ -186,7 +174,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         try {
             vncSocket = new Socket(param.getClientHostAddress(), param.getClientHostPort());
             frameCount = 0;
-            doConnect(vncSocket, param.getClientHostPassword());
+            doConnect(vncSocket);
         } catch (IOException e) {
             s_logger.error("Could not connect to host", e);
         }
@@ -244,19 +232,14 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         s_logger.error("Error in WebSocket Connection : ", t);
     }
 
-    private void doConnect(Socket socket, String password) throws IOException {
+    private void doConnect(Socket socket) throws IOException {
         is = new DataInputStream(socket.getInputStream());
         os = new DataOutputStream(socket.getOutputStream());
 
         // Initialize connection
         s_logger.warn("Stating handshake");
         handshake();
-        authenticate(password);
-        initialize();
         isConnectionStart = true;
-        s_logger.warn("initialization done");
-
-
     }
 
     public void shutdown() {
@@ -296,27 +279,41 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         frameCount++;
         if (frameCount < 0)
             frameCount = 5;
-
+        byte[] data = new byte[f.getPayloadLength()];
+        f.getPayload().get(data);
         switch (frameCount){
             case 1 : {
-                byte[] data = new byte[f.getPayloadLength()];
-                f.getPayload().get(data);
                 if (f.getPayloadLength() == 12){
                     s_logger.debug("recieved noVNC handshake");
                 }
+                os.write(data);
+                os.flush();
+                // Read security type
+                int readAuthTypeCount = is.read();
+                if (readAuthTypeCount == 0){
+                    authType = 0;
+                }else {
+                    authType = is.read();
+                }
+                sendResponseBytes(session, new byte[]{1, 1}, 2);
                 break;
             }
 
             case 2 :
+                os.write(authType);
+                os.flush();
+                doAuth(authType);
+                break;
             case 3 :{
-                byte[] data = new byte[f.getPayloadLength()];
-                f.getPayload().get(data);
+                /*
+                 * do not respond to this as request will be
+                 * auth type selected and auth result
+                 */
+                initialize();
                 break;
             }
 
             case 4 :{
-                byte[] data = new byte[f.getPayloadLength()];
-                f.getPayload().get(data);
                 os.write(data);
                 os.flush();
                 if (isConnectionStart) {
@@ -330,11 +327,10 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
                 }
             }
             default :{
-                byte[] data = new byte[f.getPayloadLength()];
-                f.getPayload().get(data);
                 os.write(data);
                 os.flush();
             }
+
 
             if (f.getType().equals(Frame.Type.CLOSE)){
                 shutdown();
@@ -345,17 +341,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
     /**
      * VNC authentication.
      */
-    private void authenticate(String password) throws IOException {
-        // Read security type
-        int readAuthTypeCount = is.read();
-        int authType;
-        if (readAuthTypeCount == 0){
-            authType = 0;
-        }else {
-            authType = is.read();
-        }
-        os.write(authType);
-        os.flush();
+    private void doAuth(int authType) throws IOException {
 
         switch (authType) {
             case RfbConstants.CONNECTION_FAILED: {
@@ -378,7 +364,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
 
             case RfbConstants.VNC_AUTH: {
                 s_logger.info("VNC server requires password authentication");
-                doVncAuth(password);
+                doVncAuth(this.hostPassword);
                 break;
             }
 
@@ -390,7 +376,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         // 1 for send auth type count
         // 1 for sending auth type used i.e no auth required
         s_logger.warn("sending auth types and response");
-        sendResponseBytes(session, new byte[]{1, 1}, 2);
         sendResponseBytes(session, new byte[]{0, 0, 0, 0}, 4);
     }
 
@@ -453,12 +438,7 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
             throw new RuntimeException("Cannot handshake with VNC server. Unsupported protocol version: \"" + rfbProtocol + "\".");
         }
 
-        // Send response: we support RFB 3.3 only
-        String ourProtocolString = RfbConstants.RFB_PROTOCOL_VERSION + "\n";
-        os.write(ourProtocolString.getBytes());
-        s_logger.warn("sendind object of size 12");
         sendResponseBytes(session, buf, 12);
-        os.flush();
     }
 
     /**
@@ -500,75 +480,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
         vncSocket.setSoTimeout(0);
         readBytes = is.read(b);
         sendResponseBytes(session, b, readBytes);
-
-        // Read server initialization message
-
-        // Read frame buffer size
-        /*int framebufferWidth = is.readUnsignedShort();
-        int framebufferHeight = is.readUnsignedShort();*/
-
-
-        // Read pixel format
-
-        /*int bitsPerPixel = is.readUnsignedByte();
-        int depth = is.readUnsignedByte();
-
-        int bigEndianFlag = is.readUnsignedByte();
-        int trueColorFlag = is.readUnsignedByte();
-
-        int redMax = is.readUnsignedShort();
-        int greenMax = is.readUnsignedShort();
-        int blueMax = is.readUnsignedShort();
-
-        int redShift = is.readUnsignedByte();
-        int greenShift = is.readUnsignedByte();
-        int blueShift = is.readUnsignedByte();
-
-        // Skip padding
-        is.skipBytes(3);
-
-
-        os.writeByte(RfbConstants.CLIENT_SET_PIXEL_FORMAT);
-        // Padding
-        os.writeByte(0);
-        os.writeByte(0);
-        os.writeByte(0);
-        os.writeByte(0);
-        // Send pixel format
-        os.writeByte(bitsPerPixel);
-        os.writeByte(depth);
-        os.writeByte(bigEndianFlag);
-        os.writeByte(trueColorFlag);
-        os.writeShort(redMax);
-        os.writeShort(greenMax);
-        os.writeShort(blueMax);
-        os.writeByte(redShift);
-        os.writeByte(greenShift);
-        os.writeByte(blueShift);
-        // Padding
-        os.writeByte(0);
-        os.writeByte(0);
-        os.writeByte(0);
-        os.flush();
-
-
-        // sending padding data
-        os.writeByte(RfbConstants.CLIENT_SET_ENCODINGS);
-        os.writeByte(0);// padding
-        os.writeShort(RfbConstants.SUPPORTED_ENCODINGS_ARRAY.length);
-        for (int i = 0; i < RfbConstants.SUPPORTED_ENCODINGS_ARRAY.length; i++) {
-            os.writeInt(RfbConstants.SUPPORTED_ENCODINGS_ARRAY[i]);
-        }
-        os.flush();
-
-        // sending frame update request and start proxying
-        os.writeByte(RfbConstants.CLIENT_FRAMEBUFFER_UPDATE_REQUEST);
-        os.writeByte(RfbConstants.FRAMEBUFFER_FULL_UPDATE_REQUEST);
-        os.writeShort(0);
-        os.writeShort(0);
-        os.writeShort(framebufferWidth);
-        os.writeShort(framebufferHeight);
-        os.flush();*/
     }
 }
 
