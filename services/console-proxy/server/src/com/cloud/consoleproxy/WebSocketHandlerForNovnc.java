@@ -181,14 +181,12 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
     }
 
     private void startProxyThread() {
-        byte[] b = new byte[1500];
+        byte[] b = new byte[15000];
         int readBytes = -1;
         while (true) {
             try {
                 vncSocket.setSoTimeout(0);
-
-                if (is.available() > 0)
-                    readBytes = is.read(b);
+                readBytes = is.read(b);
 
             } catch (IOException e) {
                 e.printStackTrace();
@@ -277,8 +275,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
     public void onFrame(Frame f) throws IOException {
         System.out.printf("Frame: %d\n", f.getPayloadLength());
         frameCount++;
-        if (frameCount < 0)
-            frameCount = 5;
         byte[] data = new byte[f.getPayloadLength()];
         f.getPayload().get(data);
         switch (frameCount){
@@ -305,15 +301,6 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
                 doAuth(authType);
                 break;
             case 3 :{
-                /*
-                 * do not respond to this as request will be
-                 * auth type selected and auth result
-                 */
-                initialize();
-                break;
-            }
-
-            case 4 :{
                 os.write(data);
                 os.flush();
                 if (isConnectionStart) {
@@ -325,16 +312,17 @@ public class WebSocketHandlerForNovnc extends WebSocketHandler {
                         }
                     }).start();
                 }
+                break;
             }
             default :{
                 os.write(data);
                 os.flush();
+                frameCount--;
             }
+        }
 
-
-            if (f.getType().equals(Frame.Type.CLOSE)){
-                shutdown();
-            }
+        if (f.getType().equals(Frame.Type.CLOSE)){
+            shutdown();
         }
     }
 
