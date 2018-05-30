@@ -35,15 +35,11 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
+import org.apache.cloudstack.framework.security.keys.KeysManager;
 import org.apache.commons.codec.binary.Base64;
 import org.apache.log4j.Logger;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.support.SpringBeanAutowiringSupport;
-
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-
-import org.apache.cloudstack.framework.security.keys.KeysManager;
 
 import com.cloud.exception.PermissionDeniedException;
 import com.cloud.host.HostVO;
@@ -63,10 +59,12 @@ import com.cloud.vm.UserVmDetailVO;
 import com.cloud.vm.VirtualMachine;
 import com.cloud.vm.VirtualMachineManager;
 import com.cloud.vm.dao.UserVmDetailsDao;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 
 /**
  * Thumbnail access : /console?cmd=thumbnail&vm=xxx&w=xxx&h=xxx
- * Console access : /conosole?cmd=access&vm=xxx
+ * Console access : /console?cmd=access&vm=xxx
  * Authentication : /console?cmd=auth&vm=xxx&sid=xxx
  */
 @Component("consoleServlet")
@@ -181,10 +179,12 @@ public class ConsoleProxyServlet extends HttpServlet {
                 return;
             }
 
+            boolean websocketConsole = Boolean.parseBoolean(req.getParameter("websocketconsole"));
+
             if (cmd.equalsIgnoreCase("thumbnail")) {
                 handleThumbnailRequest(req, resp, vmId);
             } else if (cmd.equalsIgnoreCase("access")) {
-                handleAccessRequest(req, resp, vmId);
+                handleAccessRequest(req, resp, vmId, websocketConsole);
             } else {
                 handleAuthRequest(req, resp, vmId);
             }
@@ -245,8 +245,9 @@ public class ConsoleProxyServlet extends HttpServlet {
         }
     }
 
-    private void handleAccessRequest(HttpServletRequest req, HttpServletResponse resp, long vmId) {
+    private void handleAccessRequest(HttpServletRequest req, HttpServletResponse resp, long vmId, boolean webSocketRequest) {
         VirtualMachine vm = _vmMgr.findById(vmId);
+
         if (vm == null) {
             s_logger.warn("VM " + vmId + " does not exist, sending blank response for console access request");
             sendResponse(resp, "");
@@ -287,7 +288,7 @@ public class ConsoleProxyServlet extends HttpServlet {
         }
 
         StringBuffer sb = new StringBuffer();
-        sb.append("<html><title>").append(escapeHTML(vmName)).append("</title><frameset><frame src=\"").append(composeConsoleAccessUrl(rootUrl, vm, host));
+        sb.append("<html><title>").append(escapeHTML(vmName)).append("</title><frameset><frame src=\"").append(composeConsoleAccessUrl(rootUrl, vm, host, webSocketRequest));
         sb.append("\"></frame></frameset></html>");
         s_logger.debug("the console url is :: " + sb.toString());
         sendResponse(resp, sb.toString());
@@ -414,7 +415,7 @@ public class ConsoleProxyServlet extends HttpServlet {
         return sb.toString();
     }
 
-    private String composeConsoleAccessUrl(String rootUrl, VirtualMachine vm, HostVO hostVo) {
+    private String composeConsoleAccessUrl(String rootUrl, VirtualMachine vm, HostVO hostVo, boolean webSocketRequest) {
         StringBuffer sb = new StringBuffer(rootUrl);
         String host = hostVo.getPrivateIpAddress();
 
@@ -461,7 +462,12 @@ public class ConsoleProxyServlet extends HttpServlet {
             param.setClientTunnelSession(parsedHostInfo.third());
         }
 
-        sb.append("/ajax?token=" + encryptor.encryptObject(ConsoleProxyClientParam.class, param));
+
+        if (webSocketRequest) {
+            sb.append("/novnc/?token=" + encryptor.encryptObject(ConsoleProxyClientParam.class, param));
+        } else {
+            sb.append("/ajax/?token=" + encryptor.encryptObject(ConsoleProxyClientParam.class, param));
+        }
 
         // for console access, we need guest OS type to help implement keyboard
         long guestOs = vm.getGuestOSId();
@@ -546,12 +552,11 @@ public class ConsoleProxyServlet extends HttpServlet {
             break;
 
         case DomainRouter:
-            case ConsoleProxy:
+        case ConsoleProxy:
         case SecondaryStorageVm:
             return false;
-
-            default:
-            s_logger.warn("Unrecoginized virtual machine type, deny access by default. type: " + vm.getType());
+        default:
+            s_logger.warn("Unrecognized virtual machine type, deny access by default. type: " + vm.getType());
             return false;
         }
 

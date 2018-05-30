@@ -20,7 +20,6 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -34,15 +33,6 @@ import java.util.concurrent.TimeUnit;
 
 import javax.inject.Inject;
 
-import org.apache.cloudstack.outofbandmanagement.OutOfBandManagement;
-import org.apache.cloudstack.outofbandmanagement.OutOfBandManagementService;
-import org.apache.cloudstack.outofbandmanagement.OutOfBandManagementVO;
-import org.apache.cloudstack.outofbandmanagement.dao.OutOfBandManagementDao;
-import org.apache.cloudstack.utils.identity.ManagementServerNode;
-import org.apache.cloudstack.utils.usage.UsageUtils;
-import org.apache.commons.lang.StringUtils;
-import org.apache.log4j.Logger;
-import org.springframework.stereotype.Component;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreManager;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
@@ -51,11 +41,14 @@ import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.config.Configurable;
 import org.apache.cloudstack.framework.config.dao.ConfigurationDao;
 import org.apache.cloudstack.managed.context.ManagedContextRunnable;
-import org.apache.cloudstack.storage.datastore.db.ImageStoreDao;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.utils.graphite.GraphiteClient;
 import org.apache.cloudstack.utils.graphite.GraphiteException;
+import org.apache.cloudstack.utils.usage.UsageUtils;
+import org.apache.commons.lang.StringUtils;
+import org.apache.log4j.Logger;
+import org.springframework.stereotype.Component;
 
 import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.Answer;
@@ -66,6 +59,7 @@ import com.cloud.agent.api.VgpuTypesInfo;
 import com.cloud.agent.api.VmDiskStatsEntry;
 import com.cloud.agent.api.VmNetworkStatsEntry;
 import com.cloud.agent.api.VmStatsEntry;
+import com.cloud.agent.api.VolumeStatsEntry;
 import com.cloud.cluster.ManagementServerHostVO;
 import com.cloud.cluster.dao.ManagementServerHostDao;
 import com.cloud.dc.Vlan.VlanType;
@@ -107,9 +101,9 @@ import com.cloud.storage.StorageManager;
 import com.cloud.storage.StorageStats;
 import com.cloud.storage.VolumeStats;
 import com.cloud.storage.VolumeVO;
-import com.cloud.storage.dao.StoragePoolHostDao;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.user.UserStatisticsVO;
+import com.cloud.storage.Storage.ImageFormat;
 import com.cloud.user.VmDiskStatisticsVO;
 import com.cloud.user.dao.UserStatisticsDao;
 import com.cloud.user.dao.VmDiskStatisticsDao;
@@ -166,6 +160,8 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
             "Interval (in seconds) to report vm network statistics (for Shared networks). Vm network statistics will be disabled if this is set to 0 or less than 0.", false);
     static final ConfigKey<Integer> vmNetworkStatsIntervalMin = new ConfigKey<Integer>("Advanced", Integer.class, "vm.network.stats.interval.min", "300",
             "Minimal Interval (in seconds) to report vm network statistics (for Shared networks). If vm.network.stats.interval is smaller than this, use this to report vm network statistics.", false);
+    static final ConfigKey<Integer> StatsTimeout = new ConfigKey<Integer>("Advanced", Integer.class, "stats.timeout", "60000",
+            "The timeout for stats call in milli seconds.", true, ConfigKey.Scope.Cluster);
 
     private static StatsCollector s_instance = null;
 
@@ -177,25 +173,17 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
     @Inject
     private HostDao _hostDao;
     @Inject
-    private OutOfBandManagementDao outOfBandManagementDao;
-    @Inject
     private UserVmDao _userVmDao;
     @Inject
     private VolumeDao _volsDao;
     @Inject
     private PrimaryDataStoreDao _storagePoolDao;
     @Inject
-    private ImageStoreDao _imageStoreDao;
-    @Inject
     private StorageManager _storageManager;
-    @Inject
-    private StoragePoolHostDao _storagePoolHostDao;
     @Inject
     private DataStoreManager _dataStoreMgr;
     @Inject
     private ResourceManager _resourceMgr;
-    @Inject
-    private OutOfBandManagementService outOfBandManagementService;
     @Inject
     private ConfigurationDao _configDao;
     @Inject
@@ -239,12 +227,11 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
 
     private ConcurrentHashMap<Long, HostStats> _hostStats = new ConcurrentHashMap<Long, HostStats>();
     private final ConcurrentHashMap<Long, VmStats> _VmStats = new ConcurrentHashMap<Long, VmStats>();
-    private final ConcurrentHashMap<Long, VolumeStats> _volumeStats = new ConcurrentHashMap<Long, VolumeStats>();
+    private final Map<String, VolumeStats> _volumeStats = new ConcurrentHashMap<String, VolumeStats>();
     private ConcurrentHashMap<Long, StorageStats> _storageStats = new ConcurrentHashMap<Long, StorageStats>();
     private ConcurrentHashMap<Long, StorageStats> _storagePoolStats = new ConcurrentHashMap<Long, StorageStats>();
 
     long hostStatsInterval = -1L;
-    long hostOutOfBandManagementStatsInterval = -1L;
     long hostAndVmStatsInterval = -1L;
     long storageStatsInterval = -1L;
     long volumeStatsInterval = -1L;
@@ -290,11 +277,10 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
     private void init(Map<String, String> configs) {
         _executor = Executors.newScheduledThreadPool(6, new NamedThreadFactory("StatsCollector"));
 
-        hostOutOfBandManagementStatsInterval = OutOfBandManagementService.SyncThreadInterval.value();
         hostStatsInterval = NumbersUtil.parseLong(configs.get("host.stats.interval"), 60000L);
         hostAndVmStatsInterval = NumbersUtil.parseLong(configs.get("vm.stats.interval"), 60000L);
         storageStatsInterval = NumbersUtil.parseLong(configs.get("storage.stats.interval"), 60000L);
-        volumeStatsInterval = NumbersUtil.parseLong(configs.get("volume.stats.interval"), -1L);
+        volumeStatsInterval = NumbersUtil.parseLong(configs.get("volume.stats.interval"), 600000L);
         autoScaleStatsInterval = NumbersUtil.parseLong(configs.get("autoscale.stats.interval"), 60000L);
 
         /* URI to send statistics to. Currently only Graphite is supported */
@@ -337,10 +323,6 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
             _executor.scheduleWithFixedDelay(new HostCollector(), 15000L, hostStatsInterval, TimeUnit.MILLISECONDS);
         }
 
-        if (hostOutOfBandManagementStatsInterval > 0) {
-            _executor.scheduleWithFixedDelay(new HostOutOfBandManagementStatsCollector(), 15000L, hostOutOfBandManagementStatsInterval, TimeUnit.MILLISECONDS);
-        }
-
         if (hostAndVmStatsInterval > 0) {
             _executor.scheduleWithFixedDelay(new VmStatsCollector(), 15000L, hostAndVmStatsInterval, TimeUnit.MILLISECONDS);
         }
@@ -373,6 +355,10 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
             }
         } else {
             s_logger.debug("vm.network.stats.interval - " + vmNetworkStatsInterval.value() + " is 0 or less than 0, so not scheduling the vm network stats thread");
+        }
+
+        if (volumeStatsInterval > 0) {
+            _executor.scheduleAtFixedRate(new VolumeStatsTask(), 15000L, volumeStatsInterval, TimeUnit.MILLISECONDS);
         }
 
         //Schedule disk stats update task
@@ -477,41 +463,11 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
         }
     }
 
-    class HostOutOfBandManagementStatsCollector extends ManagedContextRunnable {
-        @Override
-        protected void runInContext() {
-            try {
-                s_logger.debug("HostOutOfBandManagementStatsCollector is running...");
-                List<OutOfBandManagementVO> outOfBandManagementHosts = outOfBandManagementDao.findAllByManagementServer(ManagementServerNode.getManagementServerId());
-                if (outOfBandManagementHosts == null) {
-                    return;
-                }
-                for (OutOfBandManagement outOfBandManagementHost : outOfBandManagementHosts) {
-                    Host host = _hostDao.findById(outOfBandManagementHost.getHostId());
-                    if (host == null) {
-                        continue;
-                    }
-                    if (outOfBandManagementService.isOutOfBandManagementEnabled(host)) {
-                        outOfBandManagementService.submitBackgroundPowerSyncTask(host);
-                    } else if (outOfBandManagementHost.getPowerState() != OutOfBandManagement.PowerState.Disabled) {
-                        if (outOfBandManagementService.transitionPowerStateToDisabled(Collections.singletonList(host))) {
-                            if (s_logger.isDebugEnabled()) {
-                                s_logger.debug("Out-of-band management was disabled in zone/cluster/host, disabled power state for host id:" + host.getId());
-                            }
-                        }
-                    }
-                }
-            } catch (Throwable t) {
-                s_logger.error("Error trying to retrieve host out-of-band management stats", t);
-            }
-        }
-    }
-
     class VmStatsCollector extends ManagedContextRunnable {
         @Override
         protected void runInContext() {
             try {
-                s_logger.debug("VmStatsCollector is running...");
+                s_logger.trace("VmStatsCollector is running...");
 
                 SearchCriteria<HostVO> sc = _hostDao.createSearchCriteria();
                 sc.addAnd("status", SearchCriteria.Op.EQ, Status.Up.toString());
@@ -690,6 +646,7 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
                 return;
             }
             // collect the vm disk statistics(total) from hypervisor. added by weizhou, 2013.03.
+            s_logger.trace("Running VM disk stats ...");
             try {
                 Transaction.execute(new TransactionCallbackNoReturn() {
                     @Override
@@ -931,6 +888,51 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
                 s_logger.warn("Error while collecting vm network stats from hosts", e);
             }
         }
+    }
+
+
+    class VolumeStatsTask extends ManagedContextRunnable {
+        @Override
+        protected void runInContext() {
+            try {
+                List<StoragePoolVO> pools = _storagePoolDao.listAll();
+
+                for (StoragePoolVO pool : pools) {
+                    List<VolumeVO> volumes = _volsDao.findByPoolId(pool.getId(), null);
+                    List<String> volumeLocators = new ArrayList<String>();
+                    for (VolumeVO volume: volumes){
+                        if (volume.getFormat() == ImageFormat.QCOW2) {
+                            volumeLocators.add(volume.getUuid());
+                        }
+                        else if (volume.getFormat() == ImageFormat.VHD){
+                            volumeLocators.add(volume.getPath());
+                        }
+                        else if (volume.getFormat() == ImageFormat.OVA){
+                            volumeLocators.add(volume.getChainInfo());
+                        }
+                        else {
+                            s_logger.warn("Volume stats not implemented for this format type " + volume.getFormat() );
+                            break;
+                        }
+                    }
+                    try {
+                        HashMap<String, VolumeStatsEntry> volumeStatsByUuid = _userVmMgr.getVolumeStatistics(pool.getClusterId(), pool.getUuid(), pool.getPoolType(), volumeLocators, StatsTimeout.value());
+                        if (volumeStatsByUuid != null){
+                            _volumeStats.putAll(volumeStatsByUuid);
+                        }
+                    } catch (Exception e) {
+                        s_logger.warn("Failed to get volume stats for cluster with ID: " + pool.getClusterId(), e);
+                        continue;
+                    }
+                }
+            } catch (Throwable t) {
+                s_logger.error("Error trying to retrieve volume stats", t);
+            }
+        }
+    }
+
+    public VolumeStats getVolumeStats(String volumeLocator) {
+        return _volumeStats.get(volumeLocator);
     }
 
     class StorageCollector extends ManagedContextRunnable {
@@ -1303,11 +1305,11 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
 
     @Override
     public String getConfigComponentName() {
-        return this.getClass().getSimpleName();
+        return StatsCollector.class.getSimpleName();
     }
 
     @Override
     public ConfigKey<?>[] getConfigKeys() {
-        return new ConfigKey<?>[] { vmDiskStatsInterval, vmDiskStatsIntervalMin, vmNetworkStatsInterval, vmNetworkStatsIntervalMin };
+        return new ConfigKey<?>[] { vmDiskStatsInterval, vmDiskStatsIntervalMin, vmNetworkStatsInterval, vmNetworkStatsIntervalMin, StatsTimeout };
     }
 }

@@ -22,6 +22,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -39,12 +40,14 @@ import javax.naming.ConfigurationException;
 
 import com.cloud.agent.api.AttachOrDettachConfigDriveCommand;
 import org.apache.cloudstack.affinity.dao.AffinityGroupVMMapDao;
+import org.apache.cloudstack.ca.CAManager;
 import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.engine.orchestration.service.NetworkOrchestrationService;
 import org.apache.cloudstack.engine.orchestration.service.VolumeOrchestrationService;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreManager;
 import org.apache.cloudstack.engine.subsystem.api.storage.PrimaryDataStoreInfo;
 import org.apache.cloudstack.engine.subsystem.api.storage.StoragePoolAllocator;
+import org.apache.cloudstack.framework.ca.Certificate;
 import org.apache.cloudstack.framework.config.ConfigDepot;
 import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.config.Configurable;
@@ -97,6 +100,7 @@ import com.cloud.agent.api.StopCommand;
 import com.cloud.agent.api.UnPlugNicAnswer;
 import com.cloud.agent.api.UnPlugNicCommand;
 import com.cloud.agent.api.UnregisterVMCommand;
+import com.cloud.agent.api.routing.NetworkElementCommand;
 import com.cloud.agent.api.to.DiskTO;
 import com.cloud.agent.api.to.GPUDeviceTO;
 import com.cloud.agent.api.to.NicTO;
@@ -155,6 +159,7 @@ import com.cloud.offering.DiskOfferingInfo;
 import com.cloud.offering.ServiceOffering;
 import com.cloud.org.Cluster;
 import com.cloud.resource.ResourceManager;
+import com.cloud.resource.ResourceState;
 import com.cloud.service.ServiceOfferingVO;
 import com.cloud.service.dao.ServiceOfferingDao;
 import com.cloud.storage.DiskOfferingVO;
@@ -205,6 +210,7 @@ import com.cloud.vm.dao.VMInstanceDao;
 import com.cloud.vm.snapshot.VMSnapshotManager;
 import com.cloud.vm.snapshot.VMSnapshotVO;
 import com.cloud.vm.snapshot.dao.VMSnapshotDao;
+import com.google.common.base.Strings;
 
 public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMachineManager, VmWorkJobHandler, Listener, Configurable {
     private static final Logger s_logger = Logger.getLogger(VirtualMachineManagerImpl.class);
@@ -284,7 +290,9 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
     @Inject
     protected UserVmDetailsDao _vmDetailsDao;
     @Inject
-    ServiceOfferingDao _serviceOfferingDao = null;
+    protected ServiceOfferingDao _serviceOfferingDao = null;
+    @Inject
+    protected CAManager caManager;
 
     @Inject
     ConfigDepot _configDepot;
@@ -379,7 +387,7 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
     @DB
     public void allocate(final String vmInstanceName, final VirtualMachineTemplate template, final ServiceOffering serviceOffering,
             final DiskOfferingInfo rootDiskOfferingInfo, final List<DiskOfferingInfo> dataDiskOfferings,
-            final LinkedHashMap<? extends Network, List<? extends NicProfile>> auxiliaryNetworks, final DeploymentPlan plan, final HypervisorType hyperType)
+            final LinkedHashMap<? extends Network, List<? extends NicProfile>> auxiliaryNetworks, final DeploymentPlan plan, final HypervisorType hyperType, final Map<String, Map<Integer, String>> extraDhcpOptions)
                     throws InsufficientCapacityException {
 
         final VMInstanceVO vm = _vmDao.findVMByInstanceName(vmInstanceName);
@@ -407,7 +415,7 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
 
                 try {
                     if (!vmProfile.getBootArgs().contains("ExternalLoadBalancerVm"))
-                        _networkMgr.allocate(vmProfile, auxiliaryNetworks);
+                        _networkMgr.allocate(vmProfile, auxiliaryNetworks, extraDhcpOptions);
                 } catch (final ConcurrentOperationException e) {
                     throw new CloudRuntimeException("Concurrent operation while trying to allocate resources for the VM", e);
                 }
@@ -443,7 +451,7 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
     @Override
     public void allocate(final String vmInstanceName, final VirtualMachineTemplate template, final ServiceOffering serviceOffering,
             final LinkedHashMap<? extends Network, List<? extends NicProfile>> networks, final DeploymentPlan plan, final HypervisorType hyperType) throws InsufficientCapacityException {
-        allocate(vmInstanceName, template, serviceOffering, new DiskOfferingInfo(serviceOffering), new ArrayList<DiskOfferingInfo>(), networks, plan, hyperType);
+        allocate(vmInstanceName, template, serviceOffering, new DiskOfferingInfo(serviceOffering), new ArrayList<DiskOfferingInfo>(), networks, plan, hyperType, null);
     }
 
     private VirtualMachineGuru getVmGuru(final VirtualMachine vm) {
@@ -1023,7 +1031,6 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
 
                     cmds.addCommand(new StartCommand(vmTO, dest.getHost(), getExecuteInSequence(vm.getHypervisorType())));
 
-
                     vmGuru.finalizeDeployment(cmds, vmProfile, dest, ctx);
 
                     work = _workDao.findById(work.getId());
@@ -1072,6 +1079,23 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
                             startedVm = vm;
                             if (s_logger.isDebugEnabled()) {
                                 s_logger.debug("Start completed for VM " + vm);
+                            }
+                            final Host vmHost = _hostDao.findById(destHostId);
+                            if (vmHost != null && (VirtualMachine.Type.ConsoleProxy.equals(vm.getType()) ||
+                                    VirtualMachine.Type.SecondaryStorageVm.equals(vm.getType())) && caManager.canProvisionCertificates()) {
+                                final Map<String, String> sshAccessDetails = _networkMgr.getSystemVMAccessDetails(vm);
+                                final String csr = caManager.generateKeyStoreAndCsr(vmHost, sshAccessDetails);
+                                if (!Strings.isNullOrEmpty(csr)) {
+                                    final Map<String, String> ipAddressDetails = new HashMap<>(sshAccessDetails);
+                                    ipAddressDetails.remove(NetworkElementCommand.ROUTER_NAME);
+                                    final Certificate certificate = caManager.issueCertificate(csr, Arrays.asList(vm.getHostName(), vm.getInstanceName()), new ArrayList<>(ipAddressDetails.values()), CAManager.CertValidityPeriod.value(), null);
+                                    final boolean result = caManager.deployCertificate(vmHost, certificate, false, sshAccessDetails);
+                                    if (!result) {
+                                        s_logger.error("Failed to setup certificate for system vm: " + vm.getInstanceName());
+                                    }
+                                } else {
+                                    s_logger.error("Failed to setup keystore and generate CSR for system vm: " + vm.getInstanceName());
+                                }
                             }
                             return;
                         } else {
@@ -1508,6 +1532,12 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
                 _workDao.update(work.getId(), work);
             }
             return;
+        } else {
+            HostVO host = _hostDao.findById(hostId);
+            if (!cleanUpEvenIfUnableToStop && vm.getState() == State.Running && host.getResourceState() == ResourceState.PrepareForMaintenance) {
+                s_logger.debug("Host is in PrepareForMaintenance state - Stop VM operation on the VM id: " + vm.getId() + " is not allowed");
+                throw new CloudRuntimeException("Stop VM operation on the VM id: " + vm.getId() + " is not allowed as host is preparing for maintenance mode");
+            }
         }
 
         final VirtualMachineGuru vmGuru = getVmGuru(vm);
@@ -1710,17 +1740,20 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
 
         deleteVMSnapshots(vm, expunge);
 
-        // reload the vm object from db
-        vm = _vmDao.findByUuid(vmUuid);
-        try {
-            if (!stateTransitTo(vm, VirtualMachine.Event.DestroyRequested, vm.getHostId())) {
-                s_logger.debug("Unable to destroy the vm because it is not in the correct state: " + vm);
-                throw new CloudRuntimeException("Unable to destroy " + vm);
+        Transaction.execute(new TransactionCallbackWithExceptionNoReturn<CloudRuntimeException>() {
+            public void doInTransactionWithoutResult(final TransactionStatus status) throws CloudRuntimeException {
+                VMInstanceVO vm = _vmDao.findByUuid(vmUuid);
+                try {
+                    if (!stateTransitTo(vm, VirtualMachine.Event.DestroyRequested, vm.getHostId())) {
+                        s_logger.debug("Unable to destroy the vm because it is not in the correct state: " + vm);
+                        throw new CloudRuntimeException("Unable to destroy " + vm);
+                    }
+                } catch (final NoTransitionException e) {
+                    s_logger.debug(e.getMessage());
+                    throw new CloudRuntimeException("Unable to destroy " + vm, e);
+                }
             }
-        } catch (final NoTransitionException e) {
-            s_logger.debug(e.getMessage());
-            throw new CloudRuntimeException("Unable to destroy " + vm, e);
-        }
+        });
     }
 
     /**
@@ -2575,9 +2608,7 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
             s_logger.trace("VM Operation Thread Running");
             try {
                 _workDao.cleanup(VmOpCleanupWait.value());
-
-                // TODO. hard-coded to one hour after job has been completed
-                final Date cutDate = new Date(new Date().getTime() - 3600000);
+                final Date cutDate = new Date(DateUtil.currentGMTTime().getTime() - VmOpCleanupInterval.value() * 1000);
                 _workJobDao.expungeCompletedWorkJobs(cutDate);
             } catch (final Exception e) {
                 s_logger.error("VM Operations failed due to ", e);
@@ -2947,7 +2978,7 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
             try {
                 scanStalledVMInTransitionStateOnDisconnectedHosts();
 
-                final List<VMInstanceVO> instances = _vmDao.findVMInTransition(new Date(new Date().getTime() - AgentManager.Wait.value() * 1000), State.Starting, State.Stopping);
+                final List<VMInstanceVO> instances = _vmDao.findVMInTransition(new Date(DateUtil.currentGMTTime().getTime() - AgentManager.Wait.value() * 1000), State.Starting, State.Stopping);
                 for (final VMInstanceVO instance : instances) {
                     final State state = instance.getState();
                     if (state == State.Stopping) {

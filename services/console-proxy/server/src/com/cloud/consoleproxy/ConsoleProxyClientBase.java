@@ -197,7 +197,7 @@ public abstract class ConsoleProxyClientBase implements ConsoleProxyClient, Cons
 
         int key = ajaxImageCache.putImage(imgBits);
         StringBuffer sb = new StringBuffer();
-        sb.append("/ajaximg?token=").append(clientToken);
+        sb.append("/ajaximg/?token=").append(clientToken);
         sb.append("&key=").append(key);
         sb.append("&ts=").append(System.currentTimeMillis());
 
@@ -212,7 +212,7 @@ public abstract class ConsoleProxyClientBase implements ConsoleProxyClient, Cons
         }
 
         StringBuffer sb = new StringBuffer();
-        sb.append("/ajax?token=").append(clientToken).append("&sess=").append(ajaxSessionId);
+        sb.append("/ajax/?token=").append(clientToken).append("&sess=").append(ajaxSessionId);
         return sb.toString();
     }
 
@@ -294,6 +294,7 @@ public abstract class ConsoleProxyClientBase implements ConsoleProxyClient, Cons
 
         String[] content =
             new String[] {"<html>", "<head>", "<script type=\"text/javascript\" language=\"javascript\" src=\"/resource/js/jquery.js\"></script>",
+                "<script type=\"text/javascript\" language=\"javascript\" src=\"/resource/js/jquery.flot.navigate.js\"></script>",
                 "<script type=\"text/javascript\" language=\"javascript\" src=\"/resource/js/cloud.logger.js\"></script>",
                 "<script type=\"text/javascript\" language=\"javascript\" src=\"/resource/js/ajaxkeys.js\"></script>",
                 "<script type=\"text/javascript\" language=\"javascript\" src=\"/resource/js/ajaxviewer.js\"></script>",

@@ -1,4 +1,4 @@
-# Licensed to the Apache Software Foundation (ASF) under one
+#t	 Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
 # regarding copyright ownership.  The ASF licenses this file
@@ -778,6 +778,17 @@ test_data = {
         "privateport": 22,
         "publicport": 22,
         "protocol": "TCP"
+    },
+    "natrulerange": {
+        "privateport": 70,
+        "privateendport": 75,
+        "publicport": 70,
+        "publicendport": 75,
+        "protocol": "TCP"
+    },
+    "updatenatrulerange": {
+        "privateport": 50,
+        "privateendport": 55,
     },
    "egress_80": {
         "startport": 80,
@@ -1941,6 +1952,42 @@ test_data = {
                 "Dns": "VpcVirtualRouter"
             }
         },
+        # Services supported by the Nuage VSP plugin for VPC without userdata
+        "vpc_network_offering_nuage_dhcp": {
+            "name": 'nuage_vpc_marvin',
+            "displaytext": 'nuage_vpc_marvin',
+            "guestiptype": 'Isolated',
+            "supportedservices": 'Dhcp,StaticNat,SourceNat,NetworkACL,Connectivity,Dns',
+            "traffictype": 'GUEST',
+            "availability": 'Optional',
+            "useVpc": 'on',
+            "ispersistent": 'True',
+            "serviceProviderList": {
+                "Dhcp": "NuageVsp",
+                "StaticNat": "NuageVsp",
+                "SourceNat": "NuageVsp",
+                "NetworkACL": "NuageVsp",
+                "Connectivity": "NuageVsp",
+                "Dns": "VpcVirtualRouter",
+            },
+            "serviceCapabilityList": {
+                "SourceNat": {"SupportedSourceNatTypes": "perzone"}
+            }
+        },
+        # Services supported by the Nuage VSP plugin for VPCs
+        "vpc_offering_nuage_dhcp": {
+            "name": 'Nuage VSP VPC offering',
+            "displaytext": 'Nuage VSP VPC offering',
+            "supportedservices": 'Dhcp,StaticNat,SourceNat,NetworkACL,Connectivity,Dns',
+            "serviceProviderList": {
+                "Dhcp": "NuageVsp",
+                "StaticNat": "NuageVsp",
+                "SourceNat": "NuageVsp",
+                "NetworkACL": "NuageVsp",
+                "Connectivity": "NuageVsp",
+                "Dns": "VpcVirtualRouter",
+            }
+        },
         "shared_nuage_network_offering": {
             "name": 'nuage_marvin',
             "displaytext": 'nuage_marvin',
@@ -2037,3 +2084,4 @@ test_data = {
         }
     }
 }
+

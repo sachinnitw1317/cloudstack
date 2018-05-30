@@ -51,6 +51,7 @@ import socket
 import sys
 import time
 from retry import retry
+from nuage_vsp_statistics import VsdDataCollector
 
 
 class needscleanup(object):
@@ -74,6 +75,35 @@ class needscleanup(object):
             if wants_cleanup:
                 cleanup.append(result)
             return result
+        return _wrapper
+
+
+class gherkin(object):
+    BLACK = "\033[0;30m"
+    BLUE = "\033[0;34m"
+    GREEN = "\033[0;32m"
+    CYAN = "\033[0;36m"
+    RED = "\033[0;31m"
+    BOLDBLUE = "\033[1;34m"
+    NORMAL = "\033[0m"
+
+    def __init__(self, method):
+        self.method = method
+
+    def __get__(self, obj=None, objtype=None):
+        @functools.wraps(self.method)
+        def _wrapper(*args, **kwargs):
+            gherkin_step = self.method.__name__.replace("_", " ").capitalize()
+            obj.info("=G= %s%s%s" % (self.BOLDBLUE, gherkin_step, self.NORMAL))
+            try:
+                result = self.method(obj, *args, **kwargs)
+                obj.info("=G= %s%s: [SUCCESS]%s" %
+                         (self.GREEN, gherkin_step, self.NORMAL))
+                return result
+            except Exception as e:
+                obj.info("=G= %s%s: [FAILED]%s%s" %
+                         (self.RED, gherkin_step, self.NORMAL, e))
+                raise
         return _wrapper
 
 
@@ -848,6 +878,34 @@ class nuageTestCase(cloudstackTestCase):
         self.debug("Successfully validated the assignment and state of public "
                    "IP address - %s" % public_ip.ipaddress.ipaddress)
 
+    # verify_VRWithoutPublicIPNIC - Verifies that the given Virtual Router has
+    # no public IP and NIC
+    def verify_VRWithoutPublicIPNIC(self, vr):
+        """Verifies VR without Public IP and NIC"""
+        self.debug("Verifies that there is no public IP and NIC in Virtual "
+                   "Router - %s" % vr.name)
+        self.assertEqual(vr.publicip, None,
+                         "Virtual router has public IP"
+                         )
+        for nic in vr.nic:
+            self.assertNotEqual(nic.traffictype, "Public",
+                                "Virtual router has public NIC"
+                                )
+        self.debug("Successfully verified that there is no public IP and NIC "
+                   "in Virtual Router - %s" % vr.name)
+
+    def verify_vpc_has_no_src_nat(self, vpc, account=None):
+        if not account:
+            account = self.account
+        self.debug("Verify that there is no src NAT ip address "
+                   "allocated for the vpc")
+        src_nat_ip = PublicIPAddress.list(
+            self.api_client,
+            vpcid=vpc.id,
+            issourcenat=True,
+            account=account.name)
+        self.assertEqual(src_nat_ip, None, "VPC has a source NAT ip!")
+
     # VSD verifications; VSD is a programmable policy and analytics engine of
     # Nuage VSP SDN platform
 
@@ -876,7 +934,8 @@ class nuageTestCase(cloudstackTestCase):
     # verify_vsd_network - Verifies the given CloudStack domain and network/VPC
     # against the corresponding installed enterprise, domain, zone, and subnet
     # in VSD
-    def verify_vsd_network(self, domain_id, network, vpc=None):
+    def verify_vsd_network(self, domain_id, network, vpc=None,
+                           domain_template_name=None):
         self.debug("Verifying the creation and state of Network - %s in VSD" %
                    network.name)
         vsd_enterprise = self.vsd.get_enterprise(
@@ -890,6 +949,18 @@ class nuageTestCase(cloudstackTestCase):
         self.assertEqual(vsd_enterprise.name, domain_id,
                          "VSD enterprise name should match CloudStack domain "
                          "uuid"
+                         )
+        if domain_template_name:
+            vsd_domain_template = self.vsd.get_domain_template(
+                enterprise=vsd_enterprise,
+                filter=self.vsd.set_name_filter(domain_template_name))
+        else:
+            vsd_domain_template = self.vsd.get_domain_template(
+                enterprise=vsd_enterprise,
+                filter=ext_network_filter)
+        self.assertEqual(vsd_domain.template_id, vsd_domain_template.id,
+                         "VSD domain should be instantiated from appropriate "
+                         "domain template"
                          )
         if vpc:
             self.assertEqual(vsd_domain.description, "VPC_" + vpc.name,
@@ -984,10 +1055,10 @@ class nuageTestCase(cloudstackTestCase):
         expected_status = cs_object.state.upper() if not stopped \
             else "DELETE_PENDING"
         tries = 0
-        while (vsd_object.status != expected_status) and (tries < 10):
+        while (vsd_object.status != expected_status) and (tries < 120):
             self.debug("Waiting for the CloudStack object " + cs_object.name +
                        " to be fully resolved in VSD...")
-            time.sleep(30)
+            time.sleep(5)
             self.debug("Rechecking the CloudStack object " + cs_object.name +
                        " status in VSD...")
             vsd_object = self.vsd.get_vm(

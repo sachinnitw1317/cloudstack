@@ -87,6 +87,8 @@ known_categories = {
     'OpenDaylight': 'Network',
     'createServiceInstance': 'Network',
     'addGloboDnsHost': 'Network',
+    'listnuagevspdomaintemplates': 'Network',
+    'listnuagevspglobaldomaintemplate': 'Network',
     'Vpn': 'VPN',
     'Limit': 'Limit',
     'ResourceCount': 'Limit',
@@ -180,7 +182,13 @@ known_categories = {
     'stopNetScalerVpx' : 'Load Balancer',
     'deleteServicePackageOffering' : 'Load Balancer',
     'destroyNsVpx' : 'Load Balancer',
-    'startNsVpx' : 'Load Balancer'
+    'startNsVpx' : 'Load Balancer',
+    'listAnnotations' : 'Annotations',
+    'addAnnotation' : 'Annotations',
+    'removeAnnotation' : 'Annotations',
+    'CA': 'Certificate',
+    'listElastistorInterface': 'Misc',
+    'cloudian': 'Cloudian'
     }
 
 

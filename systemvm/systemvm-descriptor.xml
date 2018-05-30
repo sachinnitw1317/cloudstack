@@ -31,6 +31,15 @@
   </dependencySets>
   <fileSets>
     <fileSet>
+      <directory>../scripts/util/</directory>
+      <outputDirectory>scripts/util</outputDirectory>
+      <directoryMode>555</directoryMode>
+      <fileMode>555</fileMode>
+      <includes>
+        <include>keystore*</include>
+      </includes>
+    </fileSet>
+    <fileSet>
       <directory>../scripts/storage/secondary/</directory>
       <outputDirectory>scripts/storage/secondary</outputDirectory>
       <directoryMode>555</directoryMode>
@@ -72,6 +81,24 @@
       <fileMode>555</fileMode>
       <includes>
         <include>*.js</include>
+      </includes>
+    </fileSet>
+    <fileSet>
+      <directory>noVNC</directory>
+      <outputDirectory>noVNC</outputDirectory>
+      <directoryMode>555</directoryMode>
+      <fileMode>555</fileMode>
+      <includes>
+        <include>*</include>
+      </includes>
+    </fileSet>
+    <fileSet>
+      <directory>noVNC/include</directory>
+      <outputDirectory>noVNC/include</outputDirectory>
+      <directoryMode>555</directoryMode>
+      <fileMode>555</fileMode>
+      <includes>
+        <include>*</include>
       </includes>
     </fileSet>
     <fileSet>

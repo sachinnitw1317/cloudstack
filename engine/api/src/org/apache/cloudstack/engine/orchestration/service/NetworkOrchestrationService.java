@@ -77,6 +77,15 @@ public interface NetworkOrchestrationService {
     ConfigKey<Integer> NetworkThrottlingRate = new ConfigKey<Integer>("Network", Integer.class, NetworkThrottlingRateCK, "200",
         "Default data transfer rate in megabits per second allowed in network.", true, ConfigKey.Scope.Zone);
 
+    ConfigKey<Boolean> PromiscuousMode = new ConfigKey<Boolean>("Advanced", Boolean.class, "network.promiscuous.mode", "false",
+            "Whether to allow or deny promiscuous mode on nics for applicable network elements such as for vswitch/dvswitch portgroups.", true);
+
+    ConfigKey<Boolean> MacAddressChanges = new ConfigKey<Boolean>("Advanced", Boolean.class, "network.mac.address.changes", "true",
+            "Whether to allow or deny mac address changes on nics for applicable network elements such as for vswitch/dvswitch porgroups.", true);
+
+    ConfigKey<Boolean> ForgedTransmits = new ConfigKey<Boolean>("Advanced", Boolean.class, "network.forged.transmits", "true",
+            "Whether to allow or deny forged transmits on nics for applicable network elements such as for vswitch/dvswitch portgroups.", true);
+
     List<? extends Network> setupNetwork(Account owner, NetworkOffering offering, DeploymentPlan plan, String name, String displayText, boolean isDefault)
         throws ConcurrentOperationException;
 
@@ -84,8 +93,23 @@ public interface NetworkOrchestrationService {
         boolean errorIfAlreadySetup, Long domainId, ACLType aclType, Boolean subdomainAccess, Long vpcId, Boolean isDisplayNetworkEnabled)
         throws ConcurrentOperationException;
 
-    void allocate(VirtualMachineProfile vm, LinkedHashMap<? extends Network, List<? extends NicProfile>> networks) throws InsufficientCapacityException,
+    void allocate(VirtualMachineProfile vm, LinkedHashMap<? extends Network, List<? extends NicProfile>> networks, Map<String, Map<Integer, String>> extraDhcpOptions) throws InsufficientCapacityException,
         ConcurrentOperationException;
+
+    /**
+     * configures the provided dhcp options on the given nic.
+     * @param network of the nic
+     * @param nicId
+     * @param extraDhcpOptions
+     */
+    void configureExtraDhcpOptions(Network network, long nicId, Map<Integer, String> extraDhcpOptions);
+
+    /**
+     * configures dhcp options on the given nic.
+     * @param network of the nic
+     * @param nicId
+     */
+    void configureExtraDhcpOptions(Network network, long nicId);
 
     void prepare(VirtualMachineProfile profile, DeployDestination dest, ReservationContext context) throws InsufficientCapacityException, ConcurrentOperationException,
         ResourceUnavailableException;
@@ -98,8 +122,12 @@ public interface NetworkOrchestrationService {
 
     List<NicProfile> getNicProfiles(VirtualMachine vm);
 
+    Map<String, String> getSystemVMAccessDetails(VirtualMachine vm);
+
     Pair<? extends NetworkGuru, ? extends Network> implementNetwork(long networkId, DeployDestination dest, ReservationContext context)
         throws ConcurrentOperationException, ResourceUnavailableException, InsufficientCapacityException;
+
+    Map<Integer, String> getExtraDhcpOptions(long nicId);
 
     /**
      * prepares vm nic change for migration
@@ -134,9 +162,9 @@ public interface NetworkOrchestrationService {
 
     boolean destroyNetwork(long networkId, ReservationContext context, boolean forced);
 
-    Network createGuestNetwork(long networkOfferingId, String name, String displayText, String gateway, String cidr, String vlanId, String networkDomain, Account owner,
-        Long domainId, PhysicalNetwork physicalNetwork, long zoneId, ACLType aclType, Boolean subdomainAccess, Long vpcId, String ip6Gateway, String ip6Cidr,
-        Boolean displayNetworkEnabled, String isolatedPvlan) throws ConcurrentOperationException, InsufficientCapacityException, ResourceAllocationException;
+    Network createGuestNetwork(long networkOfferingId, String name, String displayText, String gateway, String cidr, String vlanId, boolean bypassVlanOverlapCheck, String networkDomain, Account owner,
+                               Long domainId, PhysicalNetwork physicalNetwork, long zoneId, ACLType aclType, Boolean subdomainAccess, Long vpcId, String ip6Gateway, String ip6Cidr,
+                               Boolean displayNetworkEnabled, String isolatedPvlan) throws ConcurrentOperationException, InsufficientCapacityException, ResourceAllocationException;
 
     UserDataServiceProvider getPasswordResetProvider(Network network);
 
@@ -146,6 +174,8 @@ public interface NetworkOrchestrationService {
         InsufficientCapacityException;
 
     boolean reallocate(VirtualMachineProfile vm, DataCenterDeployment dest) throws InsufficientCapacityException, ConcurrentOperationException;
+
+    void saveExtraDhcpOptions(String networkUuid, Long nicId, Map<String, Map<Integer, String>> extraDhcpOptionMap);
 
     /**
      * @param requested
@@ -178,6 +208,11 @@ public interface NetworkOrchestrationService {
         throws InsufficientVirtualNetworkCapacityException, InsufficientAddressCapacityException, ConcurrentOperationException, InsufficientCapacityException,
         ResourceUnavailableException;
 
+    /**
+     * Removes the provided nic from the given vm
+     * @param vm
+     * @param nic
+     */
     void removeNic(VirtualMachineProfile vm, Nic nic);
 
     /**
